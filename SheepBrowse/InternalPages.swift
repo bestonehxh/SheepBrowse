@@ -220,6 +220,7 @@ class ListPageView: NSView, NSTextFieldDelegate {
         }
         document.frame = NSRect(x: 0, y: 0, width: width, height: y + 20)
         document.cardFrames = query.isEmpty ? document.subviews.compactMap { ($0 as? PageCardView)?.frame } : []
+        document.acceptsDrops = query.isEmpty
         needsLayout = true
     }
 
@@ -234,11 +235,19 @@ class ListPageView: NSView, NSTextFieldDelegate {
         titleLabel.sizeToFit()
         titleLabel.frame.origin = NSPoint(x: iconView.frame.maxX + 10, y: iconView.frame.midY - titleLabel.frame.height / 2)
         let buttonsWidth = headerButtons.fittingSize.width
-        headerButtons.frame = NSRect(x: x + width - buttonsWidth, y: iconView.frame.midY - 15, width: buttonsWidth, height: 30)
         let searchX = max(titleLabel.frame.maxX + 24, x + width * 0.4)
-        searchBox.frame = NSRect(x: searchX, y: iconView.frame.midY - 18,
-                                 width: max(160, headerButtons.frame.minX - 12 - searchX), height: 36)
-        scroll.frame = NSRect(x: x - 4, y: 0, width: width + 8, height: iconView.frame.minY - 14)
+        var contentTop = iconView.frame.minY - 14
+        if x + width - buttonsWidth - 12 - searchX >= 240 {
+            // One row: title · search · buttons.
+            headerButtons.frame = NSRect(x: x + width - buttonsWidth, y: iconView.frame.midY - 15, width: buttonsWidth, height: 30)
+            searchBox.frame = NSRect(x: searchX, y: iconView.frame.midY - 18, width: headerButtons.frame.minX - 12 - searchX, height: 36)
+        } else {
+            // Not enough room: the buttons get their own row under the title, the search box the rest of the first.
+            searchBox.frame = NSRect(x: searchX, y: iconView.frame.midY - 18, width: x + width - searchX, height: 36)
+            headerButtons.frame = NSRect(x: x, y: iconView.frame.minY - 14 - 30, width: buttonsWidth, height: 30)
+            contentTop = headerButtons.frame.minY - 12
+        }
+        scroll.frame = NSRect(x: x - 4, y: 0, width: width + 8, height: contentTop)
         if abs(document.frame.width - width) > 1 { reload() }
     }
 
@@ -279,6 +288,8 @@ final class DropDocumentView: NSView {
         didSet { onDrop == nil ? unregisterDraggedTypes() : registerForDraggedTypes(FavoriteDrag.acceptedTypes) }
     }
     var cardFrames: [NSRect] = []
+    /// Off while a search filters the list (an index there means nothing); on for an empty folder too.
+    var acceptsDrops = false
     private let line = NSBox()
 
     override init(frame: NSRect) {
@@ -297,7 +308,7 @@ final class DropDocumentView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard onDrop != nil, !cardFrames.isEmpty else { return [] }
+        guard onDrop != nil, acceptsDrops else { return [] }
         let at = index(at: convert(sender.draggingLocation, from: nil))
         let y = at < cardFrames.count ? cardFrames[at].minY - 4 : (cardFrames.last?.maxY ?? 0) + 4
         if line.superview == nil { addSubview(line) }
@@ -692,7 +703,7 @@ final class FavoritesPageView: ListPageView {
     }
 
     private func card(for bookmark: Bookmark) -> PageCard {
-        let move = PageAction(symbol: "folder.badge.arrow.forward", label: "Move to…") { [weak self] in self?.moveMenu(for: bookmark) }
+        let move = PageAction(symbol: "arrowshape.turn.up.right", label: "Move to…") { [weak self] in self?.moveMenu(for: bookmark) }
         if bookmark.isFolder {
             var card = PageCard(image: NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
                                     .withSymbolConfiguration(.init(paletteColors: [.controlAccentColor])),

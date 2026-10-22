@@ -35,6 +35,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
     private var saveCard: SavePasswordCard?
     private var pendingSaves: [UUID: (host: String, username: String, password: String)] = [:]
     private let loginPanel = SuggestionPanel()
+    /// Site permission requests waiting for the bubble (one at a time).
+    private var permissionQueue: [(tab: BrowserTab, origin: String, permissions: [SitePermission],
+                                   answer: (PermissionPromptController.Answer) -> Void)] = []
+    private var permissionPopover: NSPopover?
+    private var permissionAnswer: ((PermissionPromptController.Answer) -> Void)?
+    /// The request the bubble shows now (to merge a repeat of it, and to know whose it is).
+    private var permissionShown: (tab: BrowserTab, origin: String, permissions: [SitePermission])?
     private var loginEntries: [SavedPassword] = []
     private var loginTab: BrowserTab?
     private var loginHost = ""
@@ -185,7 +192,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         if let findBar {
-            findBar.frame = NSRect(x: bounds.width - 12 - 330, y: below.maxY - 10 - 36, width: 330, height: 36)
+            findBar.frame = NSRect(x: bounds.width - 12 - 360, y: below.maxY - 10 - 36, width: 360, height: 36)
         }
         if let saveCard {
             let size = saveCard.preferredSize
@@ -311,6 +318,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
         showCertificateCard(for: tab)
         showSaveCard(for: tab)
         loginPanel.hide()
+        if permissionPopover != nil, permissionShown?.tab !== tab { finishPermission(.dismissed) }
         if let findBar { contentArea.addSubview(findBar) }
         layoutViews()
         if tab.isNewTabPage {
@@ -387,6 +395,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         loginPanel.hide()
+        // Every waiting request gets its answer (WebKit waits on each one).
+        let waiting = permissionQueue
+        permissionQueue.removeAll()
+        if permissionPopover != nil { finishPermission(.dismissed) }
+        waiting.forEach { $0.answer(.dismissed) }
         // Closing a window with several tabs can be undone with ⌘⇧T (Chrome).
         if !isPrivate && !isPopup && !AppDelegate.shared.isTerminating, let window {
             if tabs.count > 1 {
@@ -414,6 +427,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         tabStrip.refreshAll()
+        (permissionPopover?.contentViewController as? PermissionPromptController)?.rearm()
     }
 }
 
@@ -455,7 +469,9 @@ extension BrowserWindowController: BrowserTabDelegate {
         if !fromContextMenu, let width = features.width?.doubleValue, let height = features.height?.doubleValue {
             let screen = window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
             let size = NSSize(width: max(360, min(width, screen.width)), height: max(300, min(height + headerHeight, screen.height)))
-            let origin = NSPoint(x: features.x?.doubleValue ?? (window?.frame.midX ?? screen.midX) - size.width / 2,
+            // The page may ask for any x: keep the popup on screen (never parked under the cursor or off-screen).
+            let wantedX = features.x?.doubleValue ?? (window?.frame.midX ?? screen.midX) - size.width / 2
+            let origin = NSPoint(x: min(max(wantedX, screen.minX), max(screen.minX, screen.maxX - size.width)),
                                  y: (window?.frame.midY ?? screen.midY) - size.height / 2)
             let popup = BrowserWindowController(isPrivate: isPrivate, isPopup: true, frame: NSRect(origin: origin, size: size))
             popup.insert(newTab, at: 0, select: true)
@@ -861,6 +877,63 @@ extension BrowserWindowController {
         card.show(issue)
         if card.superview == nil { contentArea.addSubview(card) }
         layoutViews()
+    }
+
+    /// The bubble under the site icon: "meet.google.com wants to use your camera".
+    func askPermission(for tab: BrowserTab, origin: String, permissions: [SitePermission],
+                       answer: @escaping (PermissionPromptController.Answer) -> Void) {
+        // The same question again (a page calling twice, a burst of requestPermission()): one bubble answers all.
+        if let shown = permissionShown, shown.tab === tab, shown.origin == origin, shown.permissions == permissions,
+           let first = permissionAnswer {
+            permissionAnswer = { first($0); answer($0) }
+            return
+        }
+        if let index = permissionQueue.firstIndex(where: { $0.tab === tab && $0.origin == origin && $0.permissions == permissions }) {
+            let first = permissionQueue[index].answer
+            permissionQueue[index].answer = { first($0); answer($0) }
+            return
+        }
+        permissionQueue.append((tab, origin, permissions, answer))
+        if permissionPopover == nil { showNextPermission() }
+    }
+
+    private func showNextPermission() {
+        guard !permissionQueue.isEmpty else { return }
+        let request = permissionQueue.removeFirst()
+        guard request.tab === selectedTab, window?.isVisible == true else {
+            request.answer(.dismissed)
+            return showNextPermission()
+        }
+        // Answered meanwhile (Settings, Site Info, an earlier bubble): no question to ask.
+        if let known = request.tab.currentDecision(request.permissions, origin: request.origin) {
+            request.answer(.decided(known))
+            return showNextPermission()
+        }
+        let prompt = PermissionPromptController(origin: request.origin, permissions: request.permissions)
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.contentViewController = prompt
+        permissionAnswer = request.answer
+        permissionShown = (request.tab, request.origin, request.permissions)
+        // A click that lands on this bubble as it fades out must not answer the next one.
+        prompt.onAnswer = { [weak self, weak popover] answer in
+            guard let self, let popover, popover === self.permissionPopover else { return }
+            self.finishPermission(answer)
+        }
+        permissionPopover = popover
+        popover.show(relativeTo: navBar.omnibox.siteButton.bounds, of: navBar.omnibox.siteButton, preferredEdge: .minY)
+    }
+
+    /// Answered, or the tab went away / out of view (= not allowed).
+    private func finishPermission(_ answer: PermissionPromptController.Answer) {
+        let callback = permissionAnswer
+        permissionAnswer = nil
+        permissionShown = nil
+        permissionPopover?.close()
+        permissionPopover = nil
+        callback?(answer)
+        refreshChrome()
+        showNextPermission()
     }
 
     func passwordField(focusedIn tab: BrowserTab, host: String, origin: String, cssRect: CGRect, newPassword: Bool) {

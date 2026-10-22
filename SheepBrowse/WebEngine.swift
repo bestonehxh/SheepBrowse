@@ -32,6 +32,7 @@ final class WebEngine {
             config.websiteDataStore = .default()
         }
         PasswordAutofill.install(on: config.userContentController)
+        WebNotificationBridge.install(on: config.userContentController)
         config.applicationNameForUserAgent = applicationNameForUserAgent
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.isFraudulentWebsiteWarningEnabled = true

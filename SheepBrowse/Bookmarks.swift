@@ -8,6 +8,22 @@ struct Bookmark: Codable, Identifiable, Equatable {
     var children: [Bookmark]?
 
     var isFolder: Bool { children != nil }
+
+    /// Only web pages and SheepBrowse's own pages: a favorite that came from Sync or another browser's
+    /// file must not be a javascript:, data: or file: link waiting for a click.
+    static func isOpenable(_ url: String?) -> Bool {
+        guard let scheme = url.flatMap(URL.init(string:))?.scheme?.lowercased() else { return false }
+        return ["http", "https", "sheep"].contains(scheme)
+    }
+
+    /// The tree without links that are not openable (folders keep their place).
+    static func sanitized(_ nodes: [Bookmark]) -> [Bookmark] {
+        nodes.compactMap { node in
+            var node = node
+            if let children = node.children { node.children = sanitized(children); return node }
+            return isOpenable(node.url) ? node : nil
+        }
+    }
 }
 
 /// Favorites, shown on the Favorites bar (folders open as menus). Saved in bookmarks.json.
@@ -18,7 +34,7 @@ final class BookmarkStore {
     private(set) var bar: [Bookmark]
 
     private init() {
-        bar = AppFiles.read([Bookmark].self, from: "bookmarks.json") ?? []
+        bar = Bookmark.sanitized(AppFiles.read([Bookmark].self, from: "bookmarks.json") ?? [])
     }
 
     private func changed() {
@@ -36,6 +52,7 @@ final class BookmarkStore {
 
     /// Sync: the favorites as another Mac has them.
     func replaceAll(_ nodes: [Bookmark]) {
+        let nodes = Bookmark.sanitized(nodes)
         guard nodes != bar else { return }
         bar = nodes
         changed()
@@ -52,7 +69,7 @@ final class BookmarkStore {
 
     /// A page into `folder` (nil = the bar) at `index` (nil = the end). A page already saved is not added twice.
     func add(url: URL, title: String, into folder: UUID?, at index: Int?) {
-        guard bookmark(for: url) == nil else { return }
+        guard bookmark(for: url) == nil, Bookmark.isOpenable(url.absoluteString) else { return }
         let node = Bookmark(title: title.isEmpty ? (url.host ?? url.absoluteString) : title, url: url.absoluteString)
         insert(node, into: folder, at: index)
         changed()
@@ -208,7 +225,7 @@ final class BookmarkStore {
         func convert(_ node: [String: Any]) -> Bookmark? {
             let name = node["name"] as? String ?? ""
             if node["type"] as? String == "url" {
-                guard let url = node["url"] as? String, !existing.contains(url) else { return nil }
+                guard let url = node["url"] as? String, !existing.contains(url), Bookmark.isOpenable(url) else { return nil }
                 added += 1
                 return Bookmark(title: name, url: url)
             }

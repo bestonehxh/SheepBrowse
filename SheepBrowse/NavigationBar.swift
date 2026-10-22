@@ -163,6 +163,8 @@ final class OmniboxView: GlassCapsule, NSTextFieldDelegate {
     let siteButton: IconButton
     private let zoomButton = NSButton(title: "", target: nil, action: nil)
     let starButton: IconButton
+    /// Red while the page uses the camera or microphone; a click shows stop/mute.
+    let captureButton = IconButton(symbol: "video.fill", label: "Camera and Microphone", target: nil, action: nil)
     private let progressLayer = CALayer()
     private let suggestions = SuggestionPanel()
 
@@ -221,7 +223,11 @@ final class OmniboxView: GlassCapsule, NSTextFieldDelegate {
         zoomButton.layer?.cornerRadius = 9
         zoomButton.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.07).cgColor
 
-        for view in [siteButton, field, zoomButton, starButton] as [NSView] { content.addSubview(view) }
+        captureButton.pointSize = 12
+        captureButton.contentTintColor = .systemRed
+        captureButton.target = self
+        captureButton.action = #selector(showCaptureMenu)
+        for view in [siteButton, field, zoomButton, captureButton, starButton] as [NSView] { content.addSubview(view) }
 
         suggestions.onPick = { [weak self] index in self?.commit(row: index, newTab: false) }
     }
@@ -236,6 +242,11 @@ final class OmniboxView: GlassCapsule, NSTextFieldDelegate {
         starButton.isHidden = currentTab?.url == nil || currentTab?.internalPage != nil || field.isEditing
         if !starButton.isHidden {
             starButton.frame = NSRect(x: right - 28, y: (h - 26) / 2, width: 28, height: 26)
+            right -= 30
+        }
+        captureButton.isHidden = !(currentTab?.isCapturing ?? false) || field.isEditing
+        if !captureButton.isHidden {
+            captureButton.frame = NSRect(x: right - 28, y: (h - 26) / 2, width: 28, height: 26)
             right -= 30
         }
         if !zoomButton.isHidden {
@@ -254,6 +265,7 @@ final class OmniboxView: GlassCapsule, NSTextFieldDelegate {
         let zoom = tab?.webView?.pageZoom ?? 1
         zoomButton.isHidden = abs(zoom - 1) < 0.001 || field.isEditing
         zoomButton.title = "\(Int(round(zoom * 100)))%"
+        captureButton.symbol = tab?.cameraState != WKMediaCaptureState.none ? "video.fill" : "mic.fill"
         let favorite = BookmarkStore.shared.bookmark(for: tab?.url) != nil
         starButton.symbol = favorite ? "star.fill" : "star"
         starButton.contentTintColor = favorite ? .systemYellow : .secondaryLabelColor
@@ -261,6 +273,24 @@ final class OmniboxView: GlassCapsule, NSTextFieldDelegate {
         updateSiteIcon()
         updateProgress(animated: true)
         needsLayout = true
+    }
+
+    @objc private func showCaptureMenu() {
+        guard let tab = currentTab else { return }
+        let menu = NSMenu()
+        if tab.cameraState != .none {
+            menu.addItem(ClosureMenuItem(title: tab.cameraState == .active ? "Turn Off Camera" : "Turn Camera Back On") {
+                tab.setCapture(camera: tab.cameraState == .active ? .muted : .active)
+            })
+        }
+        if tab.microphoneState != .none {
+            menu.addItem(ClosureMenuItem(title: tab.microphoneState == .active ? "Mute Microphone" : "Unmute Microphone") {
+                tab.setCapture(microphone: tab.microphoneState == .active ? .muted : .active)
+            })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Stop Sharing with This Page") { tab.setCapture(camera: WKMediaCaptureState.none, microphone: WKMediaCaptureState.none) })
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: captureButton.bounds.height + 4), in: captureButton)
     }
 
     private func updateSiteIcon() {

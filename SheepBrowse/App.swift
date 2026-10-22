@@ -69,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SyncController.shared.start()
         GoogleAccount.shared.start()
         AppUpdater.start()
+        WebNotificationBridge.shared.start()
+        CaptureIsland.shared.start()
         #if DEBUG
         // Screenshots: SHEEPBROWSE_DEBUG_OPEN=tabsearch|downloads|favorites|history|passwords opens that at launch.
         if let what = ProcessInfo.processInfo.environment["SHEEPBROWSE_DEBUG_OPEN"], let front = BrowserWindowController.frontmost {
@@ -78,6 +80,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case "swipe": SwipeTest.run(in: front)
                 case "passwords": PasswordsWindowController.shared.showWindow(nil)
                 case "settings": SettingsWindowController.shared.showWindow(nil)
+                case "island":
+                    front.open(URL(string: "https://example.com/")!, typed: true, disposition: .current)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { front.selectedTab?.debugFakeCapture() }
+                case "islandopen":
+                    front.open(URL(string: "https://example.com/")!, typed: true, disposition: .current)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        front.selectedTab?.debugFakeCapture()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { CaptureIsland.shared.debugExpand() }
+                    }
                 case "render":
                     // Writes PNGs of the account card (closed / choosing) and the window's header to /tmp/claude-501/render.
                     let dir = URL(fileURLWithPath: "/tmp/claude-501/render")

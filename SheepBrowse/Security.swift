@@ -347,6 +347,34 @@ final class SiteInfoViewController: NSViewController {
            CertificateTrust.pinned(CertificateTrust.serverKey(host: urlHost, port: url.port ?? 443)) != nil {
             views.append(link("Stop Trusting This Certificate", #selector(forget)))
         }
+        // What this site may use (asked before, or used now): Ask / Allow / Block.
+        if let origin = SitePermissionStore.origin(of: tab.url) {
+            let used = SitePermission.allCases.filter {
+                SitePermissionStore.decision($0, for: origin) != nil
+                    || ($0 == .camera && tab.cameraState != .none) || ($0 == .microphone && tab.microphoneState != .none)
+            }
+            for permission in used {
+                let label = NSTextField(labelWithString: permission.title)
+                label.font = .systemFont(ofSize: 12)
+                let icon = NSImageView(image: NSImage(systemSymbolName: permission.symbol, accessibilityDescription: nil)!)
+                icon.contentTintColor = .secondaryLabelColor
+                let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+                popup.addItems(withTitles: ["Ask", "Allow", "Block"])
+                switch SitePermissionStore.decision(permission, for: origin) {
+                case .allow: popup.selectItem(at: 1)
+                case .deny: popup.selectItem(at: 2)
+                case nil: popup.selectItem(at: 0)
+                }
+                popup.controlSize = .small
+                popup.target = self
+                popup.action = #selector(changePermission(_:))
+                popup.identifier = NSUserInterfaceItemIdentifier(permission.rawValue)
+                let row = NSStackView(views: [icon, label, NSView(), popup])
+                row.spacing = 6
+                row.widthAnchor.constraint(equalToConstant: 280).isActive = true
+                views.append(row)
+            }
+        }
         if let site = AddressInput.site(of: host) {
             let blocker = NSButton(checkboxWithTitle: "Block ads and trackers on this site", target: self, action: #selector(toggleAds(_:)))
             blocker.state = Settings.blockAds && !Settings.adBlockAllowedSites.contains(site) ? .on : .off
@@ -375,6 +403,14 @@ final class SiteInfoViewController: NSViewController {
         panel.beginSheet(for: controller?.window ?? window, modalDelegate: nil, didEnd: nil, contextInfo: nil,
                          trust: unsafeTrust, message: tab.url?.host ?? "")
         view.window?.performClose(nil)
+    }
+
+    @objc private func changePermission(_ sender: NSPopUpButton) {
+        guard let raw = sender.identifier?.rawValue, let permission = SitePermission(rawValue: raw),
+              let origin = SitePermissionStore.origin(of: tab.url) else { return }
+        let decision: PermissionDecision? = [nil, .allow, .deny][sender.indexOfSelectedItem]
+        // Open tabs follow (capture that is no longer allowed stops) — SitePermissionStore.set does it.
+        SitePermissionStore.set(decision, permission, for: origin)
     }
 
     @objc private func forget() {

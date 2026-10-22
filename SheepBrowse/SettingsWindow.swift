@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 extension Settings {
@@ -228,7 +229,16 @@ private struct PrivacySettings: View {
     @State private var blockAds = Settings.blockAds
     @State private var allowed = Settings.adBlockAllowedSites.sorted()
 
+    // The window is made once: follow changes made elsewhere (Site Info, Sync) while it lives.
     var body: some View {
+        content.onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            if blockAds != Settings.blockAds { blockAds = Settings.blockAds }
+            let now = Settings.adBlockAllowedSites.sorted()
+            if allowed != now { allowed = now }
+        }
+    }
+
+    private var content: some View {
         SettingsPage {
             SettingsGroup(title: "Content Blocker",
                           footer: allowed.isEmpty ? "Blocks ad networks and trackers before they load — pages are lighter and faster."
@@ -264,6 +274,7 @@ private struct PrivacySettings: View {
 }
 
 private struct SitesSettings: View {
+    @State private var permissions = SitePermissionStore.all.sorted { $0.key < $1.key }
     @State private var certificates = CertificateTrust.all.sorted { $0.key < $1.key }
     @State private var zooms = Self.loadZooms()
 
@@ -271,8 +282,62 @@ private struct SitesSettings: View {
         (UserDefaults.standard.dictionary(forKey: "zoomBySite") as? [String: Double] ?? [:]).sorted { $0.key < $1.key }
     }
 
+    // The window is made once: follow changes made elsewhere (a bubble, Site Info, Sync) while it lives.
+    // A long list scrolls instead of growing the window past the screen.
     var body: some View {
+        Group {
+            if permissions.count * 2 + certificates.count + zooms.count > 16 {
+                ScrollView { content }.frame(height: 620)
+            } else {
+                content
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in reload() }
+    }
+
+    private func reload() {
+        let now = SitePermissionStore.all.sorted { $0.key < $1.key }
+        if now.map(\.key) != permissions.map(\.key) || now.map(\.value) != permissions.map(\.value) { permissions = now }
+        let certs = CertificateTrust.all.sorted { $0.key < $1.key }
+        if certs.map(\.key) != certificates.map(\.key) || certs.map(\.value) != certificates.map(\.value) { certificates = certs }
+        let z = Self.loadZooms()
+        if z.map(\.key) != zooms.map(\.key) || z.map(\.value) != zooms.map(\.value) { zooms = z }
+    }
+
+    private var content: some View {
         SettingsPage {
+            SettingsGroup(title: "Site Permissions",
+                          footer: "Camera, microphone, location and notifications you allowed or blocked. Remove a row to be asked again.") {
+                if permissions.isEmpty { Text("None").foregroundStyle(.secondary) }
+                ForEach(permissions, id: \.key) { origin, decisions in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(SitePermissionStore.display(origin)).font(.system(size: 13, weight: .medium))
+                        ForEach(SitePermission.allCases.filter { decisions[$0.rawValue] != nil }, id: \.self) { permission in
+                            HStack {
+                                Label(permission.title, systemImage: permission.symbol)
+                                Spacer()
+                                Picker("", selection: Binding(
+                                    get: { decisions[permission.rawValue] ?? "allow" },
+                                    set: { value in
+                                        SitePermissionStore.set(PermissionDecision(rawValue: value), permission, for: origin)
+                                        permissions = SitePermissionStore.all.sorted { $0.key < $1.key }
+                                    })) {
+                                    Text("Allow").tag("allow")
+                                    Text("Block").tag("deny")
+                                }
+                                .labelsHidden()
+                                .frame(width: 100)
+                                Button {
+                                    SitePermissionStore.set(nil, permission, for: origin)
+                                    permissions = SitePermissionStore.all.sorted { $0.key < $1.key }
+                                } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                                .buttonStyle(.plain)
+                                .help("Ask again next time")
+                            }
+                        }
+                    }
+                }
+            }
             SettingsGroup(title: "Certificates You Trusted",
                           footer: "Self-signed certificates (switches, firewalls, printers) you chose to trust. A different certificate on the same server is never accepted without asking.") {
                 if certificates.isEmpty { Text("None").foregroundStyle(.secondary) }

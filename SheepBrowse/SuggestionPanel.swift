@@ -278,6 +278,8 @@ private final class SuggestionRow: NSView {
                 detail.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 5),
                 detail.centerYAnchor.constraint(equalTo: centerYAnchor),
                 detail.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
+                title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -8),
+                detail.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
                 badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
                 badge.centerYAnchor.constraint(equalTo: centerYAnchor),
             ])

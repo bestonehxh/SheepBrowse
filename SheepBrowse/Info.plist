@@ -63,6 +63,10 @@
 	<string>A website you are visiting wants to use the camera.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>A website you are visiting wants to know your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>A website you are visiting wants to know your location.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>A website you are visiting wants to use the microphone.</string>
 	<key>NSPrincipalClass</key>

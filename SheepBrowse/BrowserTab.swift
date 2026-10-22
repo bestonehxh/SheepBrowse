@@ -50,7 +50,15 @@ final class BrowserTab: NSObject {
     private var upgradedFromTyped: URL?
     private var nextNavigationTyped = false
     /// Hosts whose camera/microphone request was answered in this tab.
-    private var mediaDecisions: [String: WKPermissionDecision] = [:]
+    /// "Allow This Time" answers, by origin, until the tab closes.
+    private var allowedOnce: [String: Set<SitePermission>] = [:]
+    /// "Don't Allow" answers in this tab (a private window saves nothing, but must not be asked again and again).
+    private var deniedOnce: [String: Set<SitePermission>] = [:]
+    private(set) var cameraState: WKMediaCaptureState = .none
+    private(set) var microphoneState: WKMediaCaptureState = .none
+    /// Posted when any tab's camera/microphone state changes (the capture island listens).
+    static let captureDidChange = Notification.Name("SheepBrowseCaptureDidChange")
+    var isCapturing: Bool { cameraState != .none || microphoneState != .none }
     private var dialogShowing = false
     /// Page dialogs since the main frame last navigated: after 3 the page gets the default answers.
     private var dialogCount = 0
@@ -174,6 +182,10 @@ final class BrowserTab: NSObject {
     }
 
     func close() {
+        let wasCapturing = isCapturing
+        cameraState = .none
+        microphoneState = .none
+        if wasCapturing { NotificationCenter.default.post(name: BrowserTab.captureDidChange, object: self) }
         webView?.stopLoading()
         observations.removeAll()
         webView?.navigationDelegate = nil
@@ -213,6 +225,14 @@ final class BrowserTab: NSObject {
         watch(\.isLoading) { tab, webView in tab.isLoading = webView.isLoading }
         watch(\.estimatedProgress) { tab, webView in tab.progress = webView.estimatedProgress }
         watch(\.hasOnlySecureContent) { tab, webView in tab.isSecure = webView.hasOnlySecureContent }
+        watch(\.cameraCaptureState) { tab, webView in
+            tab.cameraState = webView.cameraCaptureState
+            NotificationCenter.default.post(name: BrowserTab.captureDidChange, object: tab)
+        }
+        watch(\.microphoneCaptureState) { tab, webView in
+            tab.microphoneState = webView.microphoneCaptureState
+            NotificationCenter.default.post(name: BrowserTab.captureDidChange, object: tab)
+        }
         watch(\.canGoBack) { _, _ in }
         watch(\.canGoForward) { _, _ in }
         delegate?.tabWebViewDidChange(self)
@@ -413,6 +433,7 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        announceNotificationPermission()
         upgradedFromTyped = nil
         fetchFavicon()
         if !isPrivate { SessionStore.scheduleSave() }
@@ -493,19 +514,70 @@ extension BrowserTab: WKUIDelegate {
 
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
-        let key = "\(origin.protocol)://\(origin.host):\(origin.port)"
-        if let decision = mediaDecisions[key] { return decision }
-        let what: String
+        let wanted: [SitePermission]
         switch type {
-        case .camera: what = "your camera"
-        case .microphone: what = "your microphone"
-        default: what = "your camera and microphone"
+        case .camera: wanted = [.camera]
+        case .microphone: wanted = [.microphone]
+        default: wanted = [.camera, .microphone]
         }
-        let allowed = await confirm(message: "Allow “\(origin.host)” to use \(what)?",
-                                    info: "You can change this by closing the tab.", ok: "Allow")
-        let decision: WKPermissionDecision = allowed ? .grant : .deny
-        mediaDecisions[key] = decision
-        return decision
+        guard let site = SitePermissionStore.origin(origin) else { return .deny }
+        return await ask(wanted, origin: site)
+    }
+
+    func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin,
+                 initiatedBy frame: WKFrameInfo) async -> WKPermissionDecision {
+        guard let site = SitePermissionStore.origin(origin) else { return .deny }
+        return await ask([.location], origin: site)
+    }
+
+    private func ask(_ wanted: [SitePermission], origin: String) async -> WKPermissionDecision {
+        await withCheckedContinuation { continuation in
+            requestPermissions(wanted, origin: origin) { continuation.resume(returning: $0 ? .grant : .deny) }
+        }
+    }
+
+    #if DEBUG
+    /// Screenshots of the capture island without a camera.
+    func debugFakeCapture() {
+        cameraState = .active
+        microphoneState = .muted
+        NotificationCenter.default.post(name: BrowserTab.captureDidChange, object: self)
+    }
+    #endif
+
+    func onceAllowed(_ permission: SitePermission, origin: String) -> Bool {
+        allowedOnce[origin]?.contains(permission) ?? false
+    }
+
+    func allowOnce(_ permission: SitePermission, origin: String) {
+        allowedOnce[origin, default: []].insert(permission)
+    }
+
+    func denyHere(_ permission: SitePermission, origin: String) {
+        deniedOnce[origin, default: []].insert(permission)
+        allowedOnce[origin]?.remove(permission)
+    }
+
+    func deniedHere(_ permission: SitePermission, origin: String) -> Bool {
+        deniedOnce[origin]?.contains(permission) ?? false
+    }
+
+    /// Settings changed for `origin`: forget this tab's own answers for it, stop capture that is no longer
+    /// allowed, and tell the page its notification permission again.
+    func sitePermissionsChanged(for origin: String, permission: SitePermission) {
+        allowedOnce[origin]?.remove(permission)
+        deniedOnce[origin]?.remove(permission)
+        guard SitePermissionStore.origin(of: url) == origin else { return }
+        let allowed = SitePermissionStore.decision(permission, for: origin) == .allow
+        if permission == .camera, cameraState != .none, !allowed { setCapture(camera: WKMediaCaptureState.none) }
+        if permission == .microphone, microphoneState != .none, !allowed { setCapture(microphone: WKMediaCaptureState.none) }
+        if permission == .notifications { announceNotificationPermission() }
+    }
+
+    /// Stops or mutes the page's capture (the island and the address bar buttons).
+    func setCapture(camera: WKMediaCaptureState? = nil, microphone: WKMediaCaptureState? = nil) {
+        if let camera { webView?.setCameraCaptureState(camera, completionHandler: nil) }
+        if let microphone { webView?.setMicrophoneCaptureState(microphone, completionHandler: nil) }
     }
 
     /// One page dialog at a time per tab; a page that keeps asking while one is up gets the default answer.

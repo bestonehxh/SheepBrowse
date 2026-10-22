@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 
 @MainActor
 protocol TabStripDelegate: AnyObject {
@@ -108,7 +109,8 @@ final class TabStripView: WindowDragView {
     private func standardWidth(for count: Int, pinned: Int) -> CGFloat {
         let unpinned = max(1, count - pinned)
         let available = tabsLimit - tabsStart - CGFloat(pinned) * 42 - CGFloat(unpinned) * 2
-        return min(220, max(36, floor(available / CGFloat(unpinned))))
+        // Down to an icon's width (24 pt) so many tabs in a narrow window still end before + and the account.
+        return min(220, max(24, floor(available / CGFloat(unpinned))))
     }
 
     private func frames() -> [NSRect] {
@@ -298,7 +300,13 @@ final class TabItemView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func closeTab() { strip?.closeClicked(self) }
-    @objc private func toggleMute() { strip?.delegate?.tabStripToggleMute(tab) }
+    @objc private func toggleMute() {
+        if tab.isCapturing {
+            tab.setCapture(microphone: tab.microphoneState == .muted ? .active : .muted)
+        } else {
+            strip?.delegate?.tabStripToggleMute(tab)
+        }
+    }
 
     func refresh() {
         titleField.stringValue = tab.title
@@ -324,9 +332,18 @@ final class TabItemView: NSView {
         icon.contentTintColor = tab.isNewTabPage ? .secondaryLabelColor : nil
         icon.alphaValue = tab.isAsleep ? 0.45 : 1
 
-        audioButton.isHidden = !(tab.isPlayingAudio || tab.isMuted)
-        audioButton.symbol = tab.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-        audioButton.setAccessibilityLabel(tab.isMuted ? "Unmute Tab" : "Mute Tab")
+        if tab.isCapturing {
+            // Camera / microphone in use: a red icon (a click mutes or unmutes the microphone).
+            audioButton.isHidden = false
+            audioButton.symbol = tab.cameraState == .active ? "video.fill" : tab.microphoneState == .muted ? "mic.slash.fill" : "mic.fill"
+            audioButton.contentTintColor = .systemRed
+            audioButton.setAccessibilityLabel("Camera or microphone in use")
+        } else {
+            audioButton.isHidden = !(tab.isPlayingAudio || tab.isMuted)
+            audioButton.symbol = tab.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+            audioButton.contentTintColor = nil
+            audioButton.setAccessibilityLabel(tab.isMuted ? "Unmute Tab" : "Mute Tab")
+        }
         needsLayout = true
     }
 
@@ -353,6 +370,7 @@ final class TabItemView: NSView {
         } else {
             iconRect = NSRect(x: 11, y: (h - 16) / 2, width: 16, height: 16)
             spinner.isHidden = false
+            icon.isHidden = tab.isLoading && !tab.isAsleep   // the compact branch may have hidden it for ✕
             titleField.isHidden = false
             var right = bounds.width - 6
             closeButton.frame = NSRect(x: right - 20, y: (h - 20) / 2, width: 20, height: 20)

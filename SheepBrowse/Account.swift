@@ -68,8 +68,12 @@ final class GoogleAccount: NSObject, WKNavigationDelegate {
         }
     }
 
+    /// A sign-in change arrived while a probe was reading with the old cookies: read again when it ends.
+    private var probeAgain = false
+
     private func readAccountFromGoogle() {
-        guard probe == nil, let url = URL(string: "https://www.google.com/") else { return }
+        guard probe == nil else { probeAgain = true; return }
+        guard let url = URL(string: "https://www.google.com/") else { return }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.applicationNameForUserAgent = WebEngine.shared.applicationNameForUserAgent
@@ -78,7 +82,7 @@ final class GoogleAccount: NSObject, WKNavigationDelegate {
         probe = view
         view.load(URLRequest(url: url))
         // A page that never finishes must not keep a web process alive.
-        let timeout = DispatchWorkItem { [weak self] in self?.finishProbe(nil) }
+        let timeout = DispatchWorkItem { [weak self] in self?.finishProbe(nil, keep: true) }
         probeTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
     }
@@ -139,6 +143,10 @@ final class GoogleAccount: NSObject, WKNavigationDelegate {
         probe?.navigationDelegate = nil
         probe?.stopLoading()
         probe = nil
+        if probeAgain {
+            probeAgain = false
+            return readAccountFromGoogle()
+        }
         if keep {
             lastSession = nil
             return
