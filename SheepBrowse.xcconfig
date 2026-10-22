@@ -1,0 +1,13 @@
+// Build settings for the SheepBrowse target.
+//
+// Sync (Settings → Sync) signs in with the Sheep family's Google Desktop client. Its secret is NOT kept
+// in the repository: it lives in the gitignored Secrets.xcconfig (one line,
+// SHEEPSYNC_GOOGLE_CLIENT_SECRET = GOCSPX-…). Without it Sync shows "not available in this build".
+SHEEPSYNC_GOOGLE_CLIENT_SECRET =
+#include? "Secrets.xcconfig"
+
+// Code signing: the identity is named in the gitignored Signing.xcconfig (shared with
+// the other Sheep apps); without that file — a public clone — the build is ad-hoc-signed.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+#include? "Signing.xcconfig"

@@ -1,0 +1,9 @@
+.DS_Store
+xcuserdata/
+build/
+DerivedData/
+Builds/
+.build/
+.claude/settings.local.json
+Signing.xcconfig
+Secrets.xcconfig
