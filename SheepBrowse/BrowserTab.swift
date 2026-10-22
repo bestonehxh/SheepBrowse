@@ -66,6 +66,8 @@ final class BrowserTab: NSObject {
     private var externalPromptShown = false
     /// The commit that is about to happen is the error page (not a visit for history).
     fileprivate(set) var committingErrorPage = false
+    /// The address the error page on screen stands in for (nil when a real page is showing).
+    private(set) var errorPageURL: URL?
 
     /// One of the app's own pages (sheep://downloads …), drawn natively.
     private(set) var internalPage: InternalPage?
@@ -358,6 +360,12 @@ extension BrowserTab: WKNavigationDelegate {
             delegate?.tab(self, open: target, background: !navigationAction.modifierFlags.contains(.shift))
             return (.cancel, preferences)
         }
+        // The error page's Try Again (a link, so it works without the page's scripts): load the real address.
+        // Reloading would only show the stand-in page again. Anything else asking for it gets nothing.
+        if scheme == ErrorPage.retryScheme {
+            if isMain, errorPageURL != nil { DispatchQueue.main.async { self.reload() } }
+            return (.cancel, preferences)
+        }
         // A top-level data: page could pose as any site (its address reads like one) — never, as in Chrome.
         if scheme == "data" && isMain { return (.cancel, preferences) }
         // A web page may not open local files; a file the user opened (Open With) may link to its neighbours.
@@ -423,6 +431,9 @@ extension BrowserTab: WKNavigationDelegate {
         if !isPrivate && !committingErrorPage {
             HistoryStore.shared.recordVisit(url: committed, title: webView.title, typed: nextNavigationTyped)
         }
+        errorPageURL = committingErrorPage ? committed : nil
+        // Until the new page names itself (some never do): its host, not the previous page's title.
+        title = webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? committed.host ?? committed.absoluteString
         committingErrorPage = false
         nextNavigationTyped = false
         let zoom = isPrivate ? webView.pageZoom : Settings.zoom(for: committed.host)
@@ -463,6 +474,20 @@ extension BrowserTab: WKNavigationDelegate {
         guard let failing, certificateIssue == nil else { return }
         committingErrorPage = true
         webView.loadSimulatedRequest(URLRequest(url: failing), responseHTML: ErrorPage.html(for: nsError, url: failing))
+    }
+
+    /// Reload (⌘R, the toolbar, Try Again). On an error page, a fresh load of the address it stands in for.
+    func reload() {
+        guard let webView else {
+            if let url { load(url) }
+            return
+        }
+        if let failed = errorPageURL {
+            errorPageURL = nil
+            webView.load(URLRequest(url: failed))
+        } else {
+            webView.reload()
+        }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -652,33 +677,81 @@ final class SheepWebView: WKWebView {
 // MARK: - Error page
 
 enum ErrorPage {
+    /// Try Again's link (handled by the tab's navigation policy; never reaches the network).
+    static let retryScheme = "sheep-retry"
+
+    private enum Kind { case offline, notFound, refused, slow, insecure, other }
+
     static func html(for error: NSError, url: URL) -> String {
         let host = escape(url.host ?? url.absoluteString)
-        let (title, detail): (String, String) = {
+        let (kind, title, detail): (Kind, String, String) = {
             switch error.code {
-            case NSURLErrorNotConnectedToInternet: return ("You’re not connected to the internet", "Check your Wi-Fi or network cable, then try again.")
-            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: return ("Can’t find \(host)", "The server’s address could not be found. Check the spelling.")
-            case NSURLErrorTimedOut: return ("\(host) took too long to respond", "The site may be down or your connection may be slow.")
-            case NSURLErrorCannotConnectToHost: return ("Can’t connect to \(host)", "The server refused the connection.")
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorDataNotAllowed:
+                return (.offline, "You’re not connected to the internet", "Check your Wi-Fi or network cable. This page will try again when you’re back online.")
+            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
+                return (.notFound, "Can’t find this server", "The address could not be found. Check the spelling, or that the device is on this network.")
+            case NSURLErrorTimedOut:
+                return (.slow, "The server took too long", "The site may be down, or your connection may be slow.")
+            case NSURLErrorCannotConnectToHost:
+                return (.refused, "Can’t connect to this server", "The server refused the connection. It may be turned off, or not serving web pages on this port.")
             case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
                  NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateNotYetValid, NSURLErrorSecureConnectionFailed:
-                return ("This connection is not private", "\(host) did not present a certificate this Mac trusts. Someone could be pretending to be the site.")
-            default: return ("Can’t open this page", escape(error.localizedDescription))
+                return (.insecure, "This connection is not private", "The server did not present a certificate this Mac trusts. Someone could be pretending to be the site.")
+            default:
+                return (.other, "Can’t open this page", escape(error.localizedDescription))
+            }
+        }()
+        // SF Symbols-like glyphs (wifi.slash, globe, bolt.horizontal, clock, lock, exclamationmark.triangle).
+        let (glyph, tint): (String, String) = {
+            switch kind {
+            case .offline: return (#"<path d="M4 12.5Q16 2 28 12.5M8.3 17Q16 10.5 23.7 17M12.6 21.4Q16 18.8 19.4 21.4"/><circle cx="16" cy="25.4" r="1.7" fill="currentColor" stroke="none"/><path d="M6 5 26 27"/>"#, "#ff9f0a")
+            case .notFound: return (#"<circle cx="16" cy="16" r="11.5"/><ellipse cx="16" cy="16" rx="4.8" ry="11.5"/><path d="M4.5 16h23M6.5 10h19M6.5 22h19"/>"#, "#0a84ff")
+            case .refused: return (#"<path d="M11 5v6M21 5v6M8 11h16v4a8 8 0 0 1-16 0zM16 23v4"/><path d="M5 5l22 22"/>"#, "#ff9f0a")
+            case .slow: return (#"<circle cx="16" cy="16" r="11.5"/><path d="M16 9v7l4.5 3"/>"#, "#ffd60a")
+            case .insecure: return (#"<rect x="8.5" y="14" width="15" height="12" rx="3"/><path d="M11.5 14v-3.5a4.5 4.5 0 0 1 9 0V14"/><path d="M16 18.5v3"/>"#, "#ff453a")
+            case .other: return (#"<path d="M16 4.5 28.5 26.5h-25z"/><path d="M16 12.5v6.5"/><circle cx="16" cy="22.6" r="1.4" fill="currentColor" stroke="none"/>"#, "#98989d")
             }
         }()
         return """
-        <!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>\(title)</title>
+        <!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+        <meta name="viewport" content="width=device-width"><title>\(title)</title>
         <style>
-        body{font:15px -apple-system,system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
-             background:Canvas;color:CanvasText}
-        .box{max-width:460px;padding:24px;text-align:center}
-        .icon{font-size:44px;opacity:.55;margin-bottom:10px}
-        h1{font-size:22px;font-weight:600;margin:0 0 10px}
-        p{color:color-mix(in srgb,CanvasText 60%,transparent);line-height:1.45;margin:0 0 22px}
-        button{font:inherit;font-weight:500;padding:7px 18px;border-radius:999px;border:0;background:AccentColor;color:white;cursor:default}
-        code{font-size:12px;opacity:.5}
-        </style></head><body><div class="box"><div class="icon">⚠︎</div><h1>\(title)</h1><p>\(detail)</p>
-        <button onclick="location.reload()">Try Again</button><p><code>\(escape(error.domain)) \(error.code)</code></p></div></body></html>
+        :root{--tint:\(tint)}
+        *{box-sizing:border-box}
+        html,body{height:100%;margin:0}
+        body{font:14px -apple-system,system-ui,sans-serif;display:grid;place-items:center;background:Canvas;color:CanvasText;
+             -webkit-user-select:none;user-select:none;cursor:default;padding:24px}
+        .card{width:min(440px,100%);padding:36px 32px 26px;text-align:center;border-radius:28px;
+              background:color-mix(in srgb,CanvasText 4%,Canvas);border:1px solid color-mix(in srgb,CanvasText 9%,transparent);
+              box-shadow:0 18px 50px -20px rgba(0,0,0,.35)}
+        .tile{width:72px;height:72px;margin:0 auto 20px;border-radius:20px;display:grid;place-items:center;color:var(--tint);
+              background:color-mix(in srgb,var(--tint) 16%,transparent);
+              box-shadow:inset 0 1px 0 color-mix(in srgb,white 18%,transparent)}
+        .tile svg{width:36px;height:36px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+        h1{font-size:21px;font-weight:650;letter-spacing:-.01em;margin:0 0 8px}
+        .host{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 0 14px;
+              padding:3px 11px;border-radius:999px;font:500 12.5px ui-monospace,SFMono-Regular,Menlo,monospace;
+              background:color-mix(in srgb,CanvasText 7%,transparent);color:color-mix(in srgb,CanvasText 75%,transparent)}
+        p{color:color-mix(in srgb,CanvasText 58%,transparent);line-height:1.5;margin:0 0 24px;font-size:13.5px}
+        .btn{display:inline-flex;align-items:center;gap:7px;padding:9px 22px;border-radius:999px;text-decoration:none;font-weight:600;
+             color:white;background:AccentColor;
+             box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 4px 14px -6px AccentColor;transition:transform .12s,filter .12s}
+        .btn:hover{filter:brightness(1.08)} .btn:active{transform:scale(.96)}
+        .btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+        .btn.busy svg{animation:spin .8s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
+        .code{margin-top:20px;font-size:11px;color:color-mix(in srgb,CanvasText 35%,transparent)}
+        </style></head><body><div class="card">
+        <div class="tile"><svg viewBox="0 0 32 32">\(glyph)</svg></div>
+        <h1>\(title)</h1><div class="host">\(host)</div><p>\(detail)</p>
+        <a class="btn" id="retry" href="\(retryScheme):"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.8-4.1"/><path d="M12.2 1.6v3h-3"/></svg>Try Again</a>
+        <div class="code">\(escape(error.domain)) \(error.code)</div>
+        </div><script>
+        const retry = document.getElementById('retry');
+        const go = () => { retry.classList.add('busy'); location.href = '\(retryScheme):'; };
+        retry.addEventListener('click', e => { e.preventDefault(); go(); });
+        addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+        \(kind == .offline ? "addEventListener('online', go);" : "")
+        </script></body></html>
         """
     }
 

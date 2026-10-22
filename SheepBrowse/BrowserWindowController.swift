@@ -552,7 +552,7 @@ extension BrowserWindowController: TabStripDelegate {
             self.insert(self.makeNewTab(), at: index + 1, select: true)
         })
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "Reload") { if let webView = tab.webView { webView.reload() } else { tab.wake() } })
+        menu.addItem(ClosureMenuItem(title: "Reload") { if tab.webView != nil { tab.reload() } else { tab.wake() } })
         menu.addItem(ClosureMenuItem(title: "Duplicate") { [weak self] in self?.duplicate(tab) })
         menu.addItem(ClosureMenuItem(title: tab.isPinned ? "Unpin" : "Pin") { [weak self] in self?.togglePin(tab) })
         menu.addItem(ClosureMenuItem(title: tab.isMuted ? "Unmute Site" : "Mute Site") { tab.setMuted(!tab.isMuted) })
@@ -682,7 +682,7 @@ extension BrowserWindowController: NSMenuItemValidation {
 
     @objc func reloadPage(_ sender: Any?) {
         guard let tab = selectedTab else { return }
-        if let webView = tab.webView { webView.reload() } else if let url = tab.url { tab.load(url) }
+        tab.reload()
     }
 
     @objc func reloadFromOrigin(_ sender: Any?) { selectedTab?.webView?.reloadFromOrigin() }
@@ -803,7 +803,7 @@ extension BrowserWindowController: NSMenuItemValidation {
                 if allowed { sites.remove(site) } else { sites.insert(site) }
                 Settings.adBlockAllowedSites = sites
                 WebEngine.shared.refreshBlockList()
-                self?.selectedTab?.webView?.reload()
+                self?.selectedTab?.reload()
                 self?.refreshChrome()
             }
             item.state = allowed ? .off : .on

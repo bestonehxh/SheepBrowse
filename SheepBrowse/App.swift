@@ -83,6 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case "island":
                     front.open(URL(string: "https://example.com/")!, typed: true, disposition: .current)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { front.selectedTab?.debugFakeCapture() }
+                case "errorpage":
+                    // A refused connection, then Try Again is clicked 7 s later (start a server on 8765 meanwhile).
+                    front.open(URL(string: "http://127.0.0.1:8765/")!, typed: true, disposition: .current)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                        front.selectedTab?.webView?.evaluateJavaScript("document.getElementById('retry').click()")
+                    }
                 case "islandopen":
                     front.open(URL(string: "https://example.com/")!, typed: true, disposition: .current)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

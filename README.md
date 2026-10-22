@@ -3,9 +3,9 @@
 A light native macOS web browser of the Sheep family: Apple's WebKit under a Chrome-style UI — tabs on top,
 an address bar that searches Google — in the macOS 26/27 Liquid Glass look.
 
-[![Download](https://img.shields.io/badge/Download-SheepBrowse_1.0_%2812%29_for_macOS-blue)](https://github.com/bestonehxh/SheepBrowse/releases/latest/download/SheepBrowse-1.0-12.zip)
+[![Download](https://img.shields.io/badge/Download-SheepBrowse_1.0_%2813%29_for_macOS-blue)](https://github.com/bestonehxh/SheepBrowse/releases/latest/download/SheepBrowse-1.0-13.zip)
 
-**Download:** [SheepBrowse-1.0-12.zip](https://github.com/bestonehxh/SheepBrowse/releases/latest/download/SheepBrowse-1.0-12.zip) — macOS 26.4 or later, Apple Silicon. Signed and notarized; updates itself.
+**Download:** [SheepBrowse-1.0-13.zip](https://github.com/bestonehxh/SheepBrowse/releases/latest/download/SheepBrowse-1.0-13.zip) — macOS 26.4 or later, Apple Silicon. Signed and notarized; updates itself.
 
 ## Features
 - Chrome-style tabs: drag to reorder or tear off, pin, mute, tab search (⇧⌘A), recently closed (⇧⌘T)
